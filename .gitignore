@@ -1,0 +1,9 @@
+context_files
+.env
+*.pyc
+__pycache__/
+.venv/
+checkpoints/
+
+*.safetensors
+wandb/
