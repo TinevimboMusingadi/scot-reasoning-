@@ -1,0 +1,89 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="dark">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>DataEngine | S-CoT Editor</title>
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+    <div id="drop-zone" style="display: none; position: fixed; inset: 0; background: rgba(0,0,0,0.8); z-index: 100; align-items: center; justify-content: center; font-family: 'Space Grotesk', sans-serif; font-size: 2rem; border: 4px dashed var(--tertiary);">
+        DROP JSONL HERE
+    </div>
+
+    <aside class="sidebar">
+        <div class="logo-container">
+            <h1>DataEngine</h1>
+            <span>V2.0.4-STABLE</span>
+        </div>
+
+        <button class="btn-primary" id="btn-open">+ NEW BRANCH / OPEN</button>
+
+        <nav>
+            <div class="nav-section-label">Quick Load (Server)</div>
+            <div class="ghost-list">
+                <button class="ghost-btn" onclick="loadHardcoded('../data/gsm/train.jsonl')">GSM Train</button>
+                <button class="ghost-btn" onclick="loadHardcoded('../data/gsm/test.jsonl')">GSM Test</button>
+                <button class="ghost-btn" onclick="loadHardcoded('../data/scot_traces.jsonl')">S-CoT Traces</button>
+            </div>
+
+            <div class="nav-section-label">Loaded Samples</div>
+            <div class="ghost-list" id="item-list">
+                <!-- Trace items injected here -->
+                <div style="padding: 16px; font-size: 0.75rem; color: var(--text-muted);">No file loaded</div>
+            </div>
+        </nav>
+
+        <div style="margin-top: auto; display: flex; flex-direction: column; gap: 8px;">
+            <button class="ghost-btn" id="theme-toggle">Switch Theme</button>
+            <div style="font-size: 0.625rem; color: var(--text-muted); text-align: center;">Latentia Systems © 2026</div>
+        </div>
+    </aside>
+
+    <main class="main-wrapper">
+        <header class="top-nav">
+            <div class="nav-tabs">
+                <div class="nav-tab active">Explorer</div>
+                <div class="nav-tab">Compute</div>
+                <div class="nav-tab">History</div>
+            </div>
+
+            <div class="top-actions">
+                <button class="action-btn" id="btn-update-mem" disabled>SYNC TO MEMORY</button>
+                <button class="action-btn" id="btn-save-disk" style="background: var(--tertiary); color: black; font-weight: 700;" disabled>COMMIT TO DISK</button>
+            </div>
+        </header>
+
+        <section class="content-canvas">
+            <div class="card problem-card">
+                <h2>Question / Problem</h2>
+                <div class="problem-text" id="problem-text"> Natalia sold clips to 48 of her friends in April, and then she sold half as many clips in May. How many clips did Natalia sell altogether in April and May?</div>
+            </div>
+
+            <div class="editor-preview-split">
+                <div class="workspace-pane">
+                    <div class="pane-label">
+                        <span>RAW TRACE / ANSWER</span>
+                        <span style="font-family: monospace; font-size: 0.625rem;">JSONL FORMAT</span>
+                    </div>
+                    <textarea id="trace-editor" spellcheck="false" placeholder="Select a trace to edit..."></textarea>
+                </div>
+
+                <div class="workspace-pane">
+                    <div class="pane-label">
+                        <span>EDITORIAL RENDERING</span>
+                        <span style="font-size: 0.625rem;">VISUALIZATION</span>
+                    </div>
+                    <div class="preview-container" id="preview-content">
+                        <!-- Rendered trace goes here -->
+                    </div>
+                </div>
+            </div>
+        </section>
+    </main>
+
+    <div class="toast" id="toast">ACTION SUCCESSFUL</div>
+
+    <script src="script.js"></script>
+</body>
+</html>
