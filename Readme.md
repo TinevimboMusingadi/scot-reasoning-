@@ -22,4 +22,3 @@ We scale structured reasoning context significantly through teacher-model distil
 | **S-CoT Traces** | 1,929 | 1,057,318 | 548 |
 | **Flat Traces** | 1,876 | 527,888 | 281 |
 
-*Audited using Gemini 1.5 Pro.*
