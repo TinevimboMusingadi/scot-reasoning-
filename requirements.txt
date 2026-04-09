@@ -1,0 +1,9 @@
+# Run on local machine (data generation + eval only)
+google-generativeai>=0.4.1
+datasets>=2.18.0
+huggingface_hub>=0.22.0
+tqdm
+jsonlines
+python-dotenv
+evaluate
+# Note: JAX and Tunix are installed ON THE TPU VM, not locally
