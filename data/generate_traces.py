@@ -124,6 +124,7 @@ def main():
     parser.add_argument("--n", type=int, default=2000)
     parser.add_argument("--model", default="gemini-3.1-flash-lite-preview")
     parser.add_argument("--output", default="data/")
+    parser.add_argument("--start_index", type=int, default=None, help="Force start from this index (0-indexed)")
     args = parser.parse_args()
 
     Path(args.output).mkdir(exist_ok=True, parents=True)
@@ -137,8 +138,11 @@ def main():
         with open(scot_path, "r", encoding="utf-8") as f:
             existing_count = sum(1 for _ in f)
     
-    if existing_count >= args.n:
-        print(f"✅ Found {existing_count} existing traces in {scot_path}. Goal of {args.n} reached.")
+    # Use start_index if provided, otherwise auto-resume
+    start_from = args.start_index if args.start_index is not None else existing_count
+
+    if start_from >= args.n:
+        print(f"✅ Found {existing_count} existing traces in {scot_path}. Goal of {args.n} reached (start_from={start_from}).")
         return
 
     if args.dataset == "gsm8k":
@@ -151,14 +155,14 @@ def main():
             for row in ds
         ]
 
-    print(f"🚀 Resuming from sample {existing_count}/{args.n}...")
+    print(f"Starting from sample {start_from}/{args.n} (Existing: {existing_count})...")
     
-    success, total = existing_count, existing_count
+    success, total = existing_count, start_from
 
     with open(scot_path, "a", encoding="utf-8") as scot_out, \
          open(flat_path, "a", encoding="utf-8") as flat_out:
         
-        for problem, answer in tqdm(problems[existing_count:args.n], desc=f"Generating {args.dataset}", initial=existing_count, total=args.n):
+        for problem, answer in tqdm(problems[start_from:args.n], desc=f"Generating {args.dataset}", initial=start_from, total=args.n):
             total += 1
             scot = generate_scot(problem, answer, args.model)
             flat = generate_flat(problem, answer, args.model)
@@ -171,7 +175,7 @@ def main():
                 flat_out.write(json.dumps(flat) + "\n")
                 flat_out.flush()
 
-    print(f"\n✨ Generation Complete: {success}/{total} valid S-CoT traces written to {scot_path}")
+    print(f"\nGeneration Complete: {success}/{total} valid S-CoT traces written to {scot_path}")
 
 if __name__ == "__main__":
     main()
