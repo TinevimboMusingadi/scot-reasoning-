@@ -1,30 +1,24 @@
 #!/bin/bash
-# Usage: bash training/setup_tpu.sh
-# Run from your LOCAL machine after TPU state = ACTIVE
+# setup_tpu.sh
+# Run ON the TPU to initialize dependencies
 
-TPU_NAME="my-tpu-node"
-ZONE="us-east5-a"
-PROJECT="tpu-builder1"
+cd ~/scot
 
-gcloud compute tpus tpu-vm ssh $TPU_NAME \
-    --zone=$ZONE \
-    --project=$PROJECT \
-    --command="
-        mkdir -p ~/scot
-        cd ~/scot
-        # Python environment
-        python3 -m venv .venv
-        source .venv/bin/activate
+if [ ! -d ".venv" ]; then
+    echo "Initializing virtual environment..."
+    python3 -m venv .venv
+fi
 
-        # JAX with TPU support
-        pip install --upgrade pip
-        pip install 'google-tunix[prod]'
+source .venv/bin/activate
 
-        # Extra deps
-        pip install wandb huggingface_hub gcsfs datasets evaluate tqdm jsonlines python-dotenv
+# JAX with TPU support
+pip install --upgrade pip
+pip install 'google-tunix[prod]'
 
-        # Verify JAX sees the TPUs
-        python3 -c \"import jax; print('TPU devices:', jax.devices())\"
-    "
+# Extra deps
+pip install wandb huggingface_hub gcsfs datasets evaluate tqdm jsonlines python-dotenv peft
 
-echo "TPU setup complete."
+# Verify JAX sees the TPUs
+python3 -c "import jax; print('TPU devices:', jax.devices())"
+
+echo "TPU setup complete natively."
