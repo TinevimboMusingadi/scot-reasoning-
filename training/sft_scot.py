@@ -98,7 +98,12 @@ def main():
         rank=args.lora_rank,
         alpha=args.lora_rank * 2,
     )
-    model_input = model.get_model_input()
+    model_input = {
+        "input_tokens": jnp.ones((1, 256), dtype=jnp.int32),
+        "input_mask": jnp.ones((1, 256), dtype=jnp.int32),
+        "positions": jnp.arange(256, dtype=jnp.int32)[None, :],
+        "attention_mask": jnp.ones((1, 256), dtype=jnp.int32)
+    }
     lora_model  = qwix.apply_lora_to_model(model, lora_provider, rngs=nnx.Rngs(0), **model_input)
 
     save_path = args.output
