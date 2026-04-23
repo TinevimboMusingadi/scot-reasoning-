@@ -18,10 +18,15 @@ notebook = {
       "metadata": {},
       "outputs": [],
       "source": [
-        "# Install dependencies\n",
+        "# Install dependencies — pin numpy<2 to prevent C-extension ABI mismatch\n",
+        "!pip install -q 'numpy<2.0.0'\n",
         "!pip install -q 'google-tunix[prod]'\n",
-        "!pip install -q -U transformers\n",
-        "!pip install -q wandb huggingface_hub gcsfs datasets evaluate tqdm peft"
+        "!pip install -q -U 'transformers>=4.45,<=4.57.1'\n",
+        "!pip install -q wandb huggingface_hub gcsfs datasets evaluate tqdm peft\n",
+        "\n",
+        "# Restart runtime so numpy C-extensions reload cleanly\n",
+        "import os\n",
+        "os.kill(os.getpid(), 9)"
       ]
     },
     {
