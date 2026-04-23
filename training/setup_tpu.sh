@@ -1,16 +1,20 @@
 #!/bin/bash
-# setup_tpu.sh
-# Run ON the TPU to initialize dependencies
+set -e
 
 cd ~/scot
 
 if [ ! -d ".venv" ]; then
     echo "Initializing virtual environment..."
-    sudo apt-get update -y && sudo apt-get install -y python3.11-venv
+    sudo apt-get update -y
+    sudo apt-get install -y software-properties-common
+    sudo add-apt-repository -y ppa:deadsnakes/ppa
+    sudo apt-get update -y
+    sudo apt-get install -y python3.11 python3.11-venv python3.11-dev
     python3.11 -m venv .venv
 fi
 
 source .venv/bin/activate
+
 
 # JAX with TPU support
 pip install --upgrade pip
