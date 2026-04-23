@@ -3,13 +3,15 @@ set -e
 
 cd ~/scot
 
-if [ ! -d ".venv" ]; then
-    echo "Initializing virtual environment..."
-    sudo apt-get update -y
-    sudo apt-get install -y software-properties-common
-    sudo add-apt-repository -y ppa:deadsnakes/ppa
-    sudo apt-get update -y
-    sudo apt-get install -y python3.11 python3.11-venv python3.11-dev
+sudo apt-get update -y
+sudo apt-get install -y software-properties-common
+sudo add-apt-repository -y ppa:deadsnakes/ppa
+sudo apt-get update -y
+sudo apt-get install -y python3.11 python3.11-venv python3.11-dev
+
+if [ ! -f ".venv/bin/activate" ]; then
+    echo "Initializing virtual environment cleanly..."
+    rm -rf .venv
     python3.11 -m venv .venv
 fi
 
