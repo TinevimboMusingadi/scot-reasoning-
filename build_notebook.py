@@ -20,6 +20,7 @@ notebook = {
       "source": [
         "# Install dependencies\n",
         "!pip install -q 'google-tunix[prod]'\n",
+        "!pip install -q -U transformers\n",
         "!pip install -q wandb huggingface_hub gcsfs datasets evaluate tqdm peft"
       ]
     },
