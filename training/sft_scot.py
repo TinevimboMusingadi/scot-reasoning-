@@ -101,7 +101,8 @@ def main():
     model_input = {
         "input_tokens": jnp.ones((1, 256), dtype=jnp.int32),
         "positions": jnp.arange(256, dtype=jnp.int32)[None, :],
-        "cache": None
+        "cache": None,
+        "attention_mask": None
     }
     lora_model  = qwix.apply_lora_to_model(model, lora_provider, rngs=nnx.Rngs(0), **model_input)
 
