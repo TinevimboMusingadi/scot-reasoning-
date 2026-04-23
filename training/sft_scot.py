@@ -100,7 +100,6 @@ def main():
     )
     model_input = {
         "input_tokens": jnp.ones((1, 256), dtype=jnp.int32),
-        "input_mask": jnp.ones((1, 256), dtype=jnp.int32),
         "positions": jnp.arange(256, dtype=jnp.int32)[None, :],
         "attention_mask": jnp.ones((1, 256), dtype=jnp.int32)
     }
@@ -135,7 +134,7 @@ def main():
         training_config=t_config,
     )
 
-    trainer.with_gen_model_input_fn(lambda x: {"input_tokens": x["input_tokens"], "input_mask": x["input_mask"], "attention_mask": x["input_mask"], "positions": x["positions"]})
+    trainer.with_gen_model_input_fn(lambda x: {"input_tokens": x["input_tokens"], "attention_mask": x["input_mask"], "positions": x["positions"]})
     trainer.train(train_ds=train_data)
 
     # Save checkpoint
