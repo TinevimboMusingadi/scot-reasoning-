@@ -116,6 +116,7 @@ def main():
 
     trainer.with_gen_model_input_fn(lambda x: {
         "input_tokens": jnp.atleast_2d(x["input_tokens"]), 
+        "input_mask": jnp.atleast_2d(x["input_mask"]), 
         "attention_mask": jnp.atleast_2d(x["input_mask"]), 
         "positions": jnp.atleast_2d(x["positions"])
     })
