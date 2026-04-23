@@ -114,7 +114,11 @@ def main():
         training_config=t_config,
     )
 
-    trainer.with_gen_model_input_fn(lambda x: {"input_tokens": x["input_tokens"], "input_mask": x["input_mask"], "attention_mask": x["input_mask"], "positions": x["positions"]})
+    trainer.with_gen_model_input_fn(lambda x: {
+        "input_tokens": jnp.atleast_2d(x["input_tokens"]), 
+        "attention_mask": jnp.atleast_2d(x["input_mask"]), 
+        "positions": jnp.atleast_2d(x["positions"])
+    })
     trainer.train(train_ds=train_data)
 
     # Save checkpoint
