@@ -98,11 +98,7 @@ def main():
         rank=args.lora_rank,
         alpha=args.lora_rank * 2,
     )
-    model_input = {
-        "input_tokens": jnp.ones((1, 256), dtype=jnp.int32),
-        "positions": jnp.arange(256, dtype=jnp.int32)[None, :],
-        "attention_mask": jnp.ones((1, 256), dtype=jnp.int32)
-    }
+    model_input = model.get_model_input(batch_size=1, seq_len=256)
     lora_model  = qwix.apply_lora_to_model(model, lora_provider, rngs=nnx.Rngs(0), **model_input)
 
     save_path = args.output
@@ -134,7 +130,7 @@ def main():
         training_config=t_config,
     )
 
-    trainer.with_gen_model_input_fn(lambda x: {"input_tokens": x["input_tokens"], "attention_mask": x["input_mask"], "positions": x["positions"]})
+    trainer.with_gen_model_input_fn(lambda x: {"input_tokens": x["input_tokens"], "input_mask": x["input_mask"], "attention_mask": x["input_mask"], "positions": x["positions"]})
     trainer.train(train_ds=train_data)
 
     # Save checkpoint
