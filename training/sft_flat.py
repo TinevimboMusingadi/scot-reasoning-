@@ -7,7 +7,7 @@ Usage (on TPU VM):
   python ~/scot/training/sft_flat.py \
       --data gs://YOUR_BUCKET/flat_traces.jsonl \
       --output gs://YOUR_BUCKET/checkpoints/sft-flat/ \
-      --model Qwen/Qwen2.5-1.5B-Instruct
+      --model Qwen/Qwen2.5-3B-Instruct
 """
 import os, json, argparse
 import jax
@@ -16,9 +16,8 @@ import optax
 from flax import nnx
 from huggingface_hub import snapshot_download
 from tunix.models.qwen2 import model as qwen_lib
-from tunix.models.qwen2 import params_safetensors as qwen_params
+from tunix.models.qwen2 import params as qwen_params
 from tunix.sft import peft_trainer
-from tunix.sft import training_config
 import qwix
 
 def build_prompt(problem: str, trace: str) -> str:
@@ -33,19 +32,21 @@ def load_dataset_from_jsonl(path: str, tokenizer, max_seq_len: int):
             text = build_prompt(row["problem"], row["flat_trace"])
             tokens = tokenizer.encode(text)[:max_seq_len]
             pad_len = max_seq_len - len(tokens)
-            input_tokens = tokens + [tokenizer.pad_id()] * pad_len
+            pad_id = tokenizer.pad_token_id if tokenizer.pad_token_id is not None else tokenizer.eos_token_id
+            input_tokens = tokens + [pad_id] * pad_len
             input_mask   = [1] * len(tokens) + [0] * pad_len
             examples.append({
                 "input_tokens": np.array(input_tokens, dtype=np.int32),
                 "input_mask":   np.array(input_mask,   dtype=np.int32),
+                "positions":    np.arange(max_seq_len, dtype=np.int32),
             })
     return examples
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--data",   required=True)
-    parser.add_argument("--output", required=True)
-    parser.add_argument("--model",  default="Qwen/Qwen2.5-1.5B-Instruct")
+    parser.add_argument("--data",   default=os.path.expanduser("~/scot/data/full_run/flat_traces.jsonl"))
+    parser.add_argument("--output", default=os.path.expanduser("~/scot/outputs/sft-flat"))
+    parser.add_argument("--model",  default="Qwen/Qwen2.5-3B-Instruct")
     parser.add_argument("--steps",  type=int, default=500)
     parser.add_argument("--lr",     type=float, default=2e-4)
     parser.add_argument("--lora_rank", type=int, default=16)
@@ -53,9 +54,9 @@ def main():
 
     print(f"JAX devices: {jax.devices()}")
 
-    # Mesh — v5p-8 has 8 chips
+    # Mesh — v5p-8 has 4 or 8 chips. Use FSDP instead of TP to avoid head divisibility errors.
     n = len(jax.devices())
-    MESH = [(1, n), ("fsdp", "tp")]
+    MESH = [(n, 1), ("fsdp", "tp")]
     mesh = jax.make_mesh(*MESH, axis_types=(jax.sharding.AxisType.Auto,) * 2)
 
     # Download model weights
@@ -64,7 +65,7 @@ def main():
 
     model_path = snapshot_download(repo_id=args.model, ignore_patterns=["*.pth"])
 
-    config = qwen_lib.ModelConfig.qwen2_5_1_5b()
+    config = qwen_lib.ModelConfig.qwen2p5_3b()
     with mesh:
         model = qwen_params.create_model_from_safe_tensors(
             model_path, config, mesh, dtype=jnp.bfloat16
@@ -72,14 +73,24 @@ def main():
 
     # Apply QLoRA
     lora_provider = qwix.LoraProvider(
-        module_path=".*q_einsum|.*kv_einsum|.*gate_proj|.*down_proj|.*up_proj",
+        module_path=".*gate_proj|.*down_proj|.*up_proj",
         rank=args.lora_rank,
         alpha=args.lora_rank * 2,
-        weight_qtype="nf4",
-        tile_size=128,
     )
     model_input = model.get_model_input()
-    lora_model  = qwix.apply_lora_to_model(model, lora_provider, **model_input)
+    lora_model  = qwix.apply_lora_to_model(model, lora_provider, rngs=nnx.Rngs(0), **model_input)
+
+    save_path = args.output
+    # Safe Restoration logic!
+    from orbax import checkpoint as ocp
+    checkpointer = ocp.StandardCheckpointer()
+    if os.path.isdir(save_path) and any(os.scandir(save_path)):
+        try:
+            print(f"[*] Resuming weights proactively from resilient backup in {save_path}...")
+            restored = checkpointer.restore(save_path)
+            nnx.update(lora_model, restored)
+        except Exception as e:
+            print(f"[!] Warning: Safe Resumption failed natively. Proceeding from baseline... Error: {e}")
 
     # Dataset
     MAX_SEQ_LEN = 2048
@@ -87,7 +98,7 @@ def main():
     print(f"Loaded {len(train_data)} training examples.")
 
     # Trainer Config
-    t_config  = training_config.TrainingConfig(
+    t_config  = peft_trainer.TrainingConfig(
         eval_every_n_steps=100, 
         max_steps=args.steps
     )
@@ -98,7 +109,7 @@ def main():
         training_config=t_config,
     )
 
-    trainer.with_gen_model_input_fn(lambda x: {"input_tokens": x["input_tokens"], "input_mask": x["input_mask"]})
+    trainer.with_gen_model_input_fn(lambda x: {"input_tokens": x["input_tokens"], "input_mask": x["input_mask"], "attention_mask": x["input_mask"], "positions": x["positions"]})
     trainer.train(train_ds=train_data)
 
     # Save checkpoint
