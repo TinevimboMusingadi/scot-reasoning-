@@ -6,7 +6,8 @@ cd ~/scot
 
 if [ ! -d ".venv" ]; then
     echo "Initializing virtual environment..."
-    python3 -m venv .venv
+    sudo apt-get update -y && sudo apt-get install -y python3.11-venv
+    python3.11 -m venv .venv
 fi
 
 source .venv/bin/activate
@@ -19,6 +20,6 @@ pip install 'google-tunix[prod]'
 pip install wandb huggingface_hub gcsfs datasets evaluate tqdm jsonlines python-dotenv peft
 
 # Verify JAX sees the TPUs
-python3 -c "import jax; print('TPU devices:', jax.devices())"
+python -c "import jax; print('TPU devices:', jax.devices())"
 
 echo "TPU setup complete natively."
