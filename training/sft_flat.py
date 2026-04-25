@@ -1,13 +1,10 @@
 """
-SFT fine-tuning of Qwen2.5-1.5B on flat <think> traces using Tunix.
+SFT fine-tuning of Qwen2.5-3B on flat <think> traces using Tunix.
 Run ON the TPU VM after setup_tpu.sh completes.
 
 Usage (on TPU VM):
   source .venv/bin/activate
-  python ~/scot/training/sft_flat.py \
-      --data gs://YOUR_BUCKET/flat_traces.jsonl \
-      --output gs://YOUR_BUCKET/checkpoints/sft-flat/ \
-      --model Qwen/Qwen2.5-3B-Instruct
+  python ~/scot/training/sft_flat.py
 """
 import os, json, argparse
 import jax
@@ -18,6 +15,7 @@ from huggingface_hub import snapshot_download
 from tunix.models.qwen2 import model as qwen_lib
 from tunix.models.qwen2 import params as qwen_params
 from tunix.sft import peft_trainer
+from tunix.sft import utils as tunix_utils
 import qwix
 
 def build_prompt(problem: str, trace: str) -> str:
@@ -38,7 +36,6 @@ def load_dataset_from_jsonl(path: str, tokenizer, max_seq_len: int):
             examples.append({
                 "input_tokens": np.array(input_tokens, dtype=np.int32),
                 "input_mask":   np.array(input_mask,   dtype=np.int32),
-                "positions":    np.arange(max_seq_len, dtype=np.int32),
             })
     return examples
 
@@ -71,19 +68,23 @@ def main():
             model_path, config, mesh, dtype=jnp.bfloat16
         )
 
-    # Apply QLoRA
+    # Apply LoRA — use Tunix's native get_model_input() as shown in the official docs.
     lora_provider = qwix.LoraProvider(
         module_path=".*gate_proj|.*down_proj|.*up_proj",
         rank=args.lora_rank,
         alpha=args.lora_rank * 2,
     )
-    model_input = {
-        "input_tokens": jnp.ones((1, 256), dtype=jnp.int32),
-        "positions": jnp.arange(256, dtype=jnp.int32)[None, :],
-        "cache": None,
-        "attention_mask": None
-    }
-    lora_model  = qwix.apply_lora_to_model(model, lora_provider, rngs=nnx.Rngs(0), **model_input)
+    model_input = model.get_model_input()
+    lora_model = qwix.apply_lora_to_model(
+        model, lora_provider, **model_input
+    )
+
+    # Shard the LoRA state properly across the mesh (from official Tunix LoRA docs)
+    with mesh:
+        state = nnx.state(lora_model)
+        pspecs = nnx.get_partition_spec(state)
+        sharded_state = jax.lax.with_sharding_constraint(state, pspecs)
+        nnx.update(lora_model, sharded_state)
 
     save_path = args.output
     # Safe Restoration logic!
@@ -102,6 +103,20 @@ def main():
     train_data  = load_dataset_from_jsonl(args.data, tokenizer, MAX_SEQ_LEN)
     print(f"Loaded {len(train_data)} training examples.")
 
+    # Determine the pad token ID for building masks in input_fn
+    pad_id = tokenizer.pad_token_id if tokenizer.pad_token_id is not None else tokenizer.eos_token_id
+
+    # gen_model_input_fn — follows the official Tunix pattern from the docs.
+    # Uses tunix.sft.utils to build correct positions and causal attention masks.
+    def input_fn(x):
+        mask = x["input_tokens"] != pad_id
+        return {
+            "input_tokens": x["input_tokens"],
+            "input_mask": x["input_mask"],
+            "positions": tunix_utils.build_positions_from_mask(mask),
+            "attention_mask": tunix_utils.make_causal_attn_mask(mask),
+        }
+
     # Trainer Config
     t_config  = peft_trainer.TrainingConfig(
         eval_every_n_steps=100, 
@@ -114,17 +129,13 @@ def main():
         training_config=t_config,
     )
 
-    trainer.with_gen_model_input_fn(lambda x: {
-        "input_tokens": jnp.atleast_2d(x["input_tokens"]), 
-        "input_mask": jnp.atleast_2d(x["input_mask"]), 
-        "attention_mask": jnp.atleast_2d(x["input_mask"]), 
-        "positions": jnp.atleast_2d(x["positions"])
-    })
+    trainer.with_gen_model_input_fn(input_fn)
     trainer.train(train_ds=train_data)
 
     # Save checkpoint
     from orbax import checkpoint as ocp
     checkpointer = ocp.StandardCheckpointer()
+    os.makedirs(args.output, exist_ok=True)
     checkpointer.save(args.output, nnx.state(lora_model))
     print(f"Checkpoint saved to {args.output}")
 
