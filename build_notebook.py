@@ -1,9 +1,8 @@
 """
-Generates colab_inference.ipynb — Downloads inference results from GCS
-and displays S-CoT vs Flat comparison.
+Generates colab_inference.ipynb — Runs inference on Colab TPU runtime.
 
-No Tunix/TPU code here. Inference runs on the TPU via run_inference.py
-and results are synced to GCS as JSON files.
+Tunix is TPU-only, so the notebook MUST use a Colab TPU runtime.
+Runtime > Change runtime type > TPU v2
 """
 import json
 
@@ -30,15 +29,14 @@ def code_cell(code_text):
 notebook = {
     "cells": [
         md_cell([
-            "# \U0001f9e0 S-CoT Distilled Model \u2014 Results & Analysis",
+            "# \U0001f9e0 S-CoT Distilled Model \u2014 TPU Inference",
             "",
-            "This notebook downloads inference results generated **on the TPU** and displays them.",
+            "Run inference on your distilled Qwen2.5-3B LoRA models directly on a **Colab TPU**.",
             "",
-            "> **Why not run inference here?** The training used [Tunix](https://github.com/google/tunix),",
-            "> a **TPU-only** JAX framework. The LoRA checkpoints are in Orbax format.",
-            "> Inference runs automatically on the TPU after training and results sync to GCS.",
+            "> \u26a0\ufe0f **IMPORTANT:** Go to **Runtime \u2192 Change runtime type \u2192 TPU v2**",
+            "> before running this notebook. Tunix is a TPU-only framework.",
             "",
-            "**Two models trained on TPU v6e-8:**",
+            "**Two models available:**",
             "| Model | Final Loss | Perplexity | Dataset |",
             "|-------|-----------|------------|---------|",
             "| `sft-scot` (S-CoT reasoning) | 1.27 | 3.55 | 3,817 |",
@@ -46,186 +44,232 @@ notebook = {
         ]),
 
         code_cell("""\
-# Cell 1: Authenticate & download results from GCS
+# Cell 1: Install dependencies & restart runtime
+!pip install -q 'numpy<2.0.0'
+!pip install -q 'google-tunix[prod]'
+!pip install -q -U 'transformers>=4.45,<=4.57.1'
+!pip install -q jsonlines
+
+# Restart runtime so numpy C-extensions reload cleanly
+import os
+os.kill(os.getpid(), 9)"""),
+
+        code_cell("""\
+# Cell 2: Verify TPU & authenticate
+import jax
+devices = jax.devices()
+print(f"JAX devices: {devices}")
+print(f"Device type: {devices[0].platform}")
+
+assert devices[0].platform == 'tpu', (
+    "\\n\\n\u274c You are NOT on a TPU runtime!\\n"
+    "Go to Runtime > Change runtime type > TPU v2\\n"
+    "Then restart and re-run from Cell 1."
+)
+print(f"\\n\u2705 TPU detected! {len(devices)} cores available.")
+
+# Authenticate for GCS access
 from google.colab import auth
 auth.authenticate_user()
+print("\u2705 Authenticated with Google Cloud.")\
+"""),
 
-import os, subprocess
+        code_cell("""\
+# Cell 3: Download checkpoints from GCS
+import os
 
-!mkdir -p /content/scot_results
+!mkdir -p /content/checkpoints/sft-scot
+!mkdir -p /content/checkpoints/sft-flat
 
-# Download everything from the GCS bucket
-print("Downloading from gs://tpu-builder1-scot-checkpoints/ ...")
-!gsutil -m cp -r gs://tpu-builder1-scot-checkpoints/* /content/scot_results/ 2>/dev/null || true
+print("Downloading S-CoT checkpoint...")
+!gsutil -m cp -r gs://tpu-builder1-scot-checkpoints/sft-scot/* /content/checkpoints/sft-scot/ 2>/dev/null || echo '\u26a0\ufe0f S-CoT checkpoint not found in bucket yet'
+
+print("\\nDownloading Flat checkpoint...")
+!gsutil -m cp -r gs://tpu-builder1-scot-checkpoints/sft-flat/* /content/checkpoints/sft-flat/ 2>/dev/null || echo '\u26a0\ufe0f Flat checkpoint not found in bucket yet'
 
 # Show what we got
-total = 0
-for root, dirs, files in os.walk('/content/scot_results'):
-    for f in files:
-        path = os.path.join(root, f)
-        size = os.path.getsize(path)
-        total += size
-        print(f'  {path} ({size:,} bytes)')
-
-if total == 0:
-    print("\\n\u26a0\ufe0f  Bucket is empty! Inference hasn't run yet.")
-    print("Run the watchdog and wait for training + inference to complete.")
-else:
-    print(f"\\n\u2705 Downloaded {total:,} bytes total")\
+print("\\n" + "="*50)
+for variant in ['sft-scot', 'sft-flat']:
+    path = f'/content/checkpoints/{variant}'
+    if os.path.exists(path):
+        files = os.listdir(path)
+        total = sum(os.path.getsize(os.path.join(path, f)) for f in files if os.path.isfile(os.path.join(path, f)))
+        print(f"  {variant}: {len(files)} files, {total:,} bytes")
+    else:
+        print(f"  {variant}: not found")\
 """),
 
         code_cell("""\
-# Cell 2: Display helper + S-CoT results
-import json, os
+#@title Cell 4: Load Model & Checkpoint { run: "auto" }
+MODEL_VARIANT = 'sft-scot' #@param ['sft-scot', 'sft-flat']
+
+import jax
+import jax.numpy as jnp
+from transformers import AutoTokenizer
+from tunix.models.qwen2 import model as qwen_lib
+from tunix.models.qwen2 import params as qwen_params
+from flax import nnx
+from orbax import checkpoint as ocp
+from huggingface_hub import snapshot_download
+import qwix
+import os
+
+# S-CoT special tokens (only needed for sft-scot)
+SCOT_TOKENS = [
+    "<reasoning>", "</reasoning>",
+    "<meta_reasoning>", "</meta_reasoning>",
+    "<abduction>", "</abduction>",
+    "<decompose>", "</decompose>",
+    "<deduction>", "</deduction>",
+    "<induction>", "</induction>",
+    "<analogy>", "</analogy>",
+    "<causal>", "</causal>",
+    "<answer>", "</answer>",
+]
+
+# 1. Load tokenizer
+base_model_id = 'Qwen/Qwen2.5-3B-Instruct'
+tokenizer = AutoTokenizer.from_pretrained(base_model_id)
+
+if MODEL_VARIANT == 'sft-scot':
+    tokenizer.add_tokens(SCOT_TOKENS, special_tokens=True)
+    print(f"Added {len(SCOT_TOKENS)} S-CoT tokens to tokenizer.")
+
+# 2. Build base model on TPU
+print("\\nBuilding Qwen2.5-3B on TPU...")
+config = qwen_lib.ModelConfig.qwen2p5_3b()
+devices = jax.devices()
+n = len(devices)
+mesh = jax.sharding.Mesh(
+    jnp.array(devices).reshape((n, 1)),
+    ('fsdp', 'tp')
+)
+
+model_path = snapshot_download(repo_id=base_model_id, ignore_patterns=['*.pth'])
+with mesh:
+    model = qwen_params.create_model_from_safe_tensors(
+        model_path, config, mesh, dtype=jnp.bfloat16
+    )
+print("\u2705 Base model loaded on TPU.")
+
+# 3. Apply LoRA
+print("Applying LoRA (rank=16, alpha=32)...")
+lora_provider = qwix.LoraProvider(
+    module_path='.*gate_proj|.*down_proj|.*up_proj',
+    rank=16,
+    alpha=32.0,
+)
+model_input = model.get_model_input()
+lora_model = qwix.apply_lora_to_model(
+    model, lora_provider, rngs=nnx.Rngs(0), **model_input
+)
+
+# 4. Load checkpoint
+ckpt_dir = f'/content/checkpoints/{MODEL_VARIANT}'
+print(f"\\nLoading checkpoint from {ckpt_dir}...")
+checkpointer = ocp.StandardCheckpointer()
+if os.path.exists(ckpt_dir) and any(os.scandir(ckpt_dir)):
+    restored = checkpointer.restore(ckpt_dir)
+    nnx.update(lora_model, restored)
+    print(f"\u2705 {MODEL_VARIANT} checkpoint loaded!")
+else:
+    print(f"\u26a0\ufe0f {ckpt_dir} is empty — running with UNTRAINED LoRA weights!")
+
+print(f"\\n\U0001f680 Model ready for inference ({MODEL_VARIANT}).")\
+"""),
+
+        code_cell("""\
+# Cell 5: Run inference
+from tunix.sft import utils as tunix_utils
+import time, sys
+
+def generate(question, max_new_tokens=512):
+    \"\"\"Generate a response with streaming output.\"\"\"
+    prompt = f'<|im_start|>user\\n{question}<|im_end|>\\n<|im_start|>assistant\\n'
+    input_ids = jnp.array([tokenizer.encode(prompt)])
+    current_ids = input_ids
+
+    print(f'\\n{\"=\"*60}')
+    print(f'\U0001f4ac Q: {question}')
+    print(f'\U0001f9e0 A: ', end='')
+
+    generated_tokens = []
+    start = time.time()
+
+    for _ in range(max_new_tokens):
+        mask = jnp.ones_like(current_ids, dtype=jnp.bool_)
+        positions = tunix_utils.build_positions_from_mask(mask)
+        attn_mask = tunix_utils.make_causal_attn_mask(mask)
+
+        logits = lora_model(
+            input_tokens=current_ids,
+            input_mask=jnp.ones_like(current_ids),
+            positions=positions,
+            attention_mask=attn_mask,
+        )
+        next_token = int(jnp.argmax(logits[0, -1, :]))
+
+        eos_id = tokenizer.eos_token_id
+        im_end_id = tokenizer.convert_tokens_to_ids('<|im_end|>')
+        if next_token in [eos_id, im_end_id]:
+            break
+
+        generated_tokens.append(next_token)
+        current_ids = jnp.concatenate(
+            [current_ids, jnp.array([[next_token]])], axis=1
+        )
+        char = tokenizer.decode([next_token])
+        sys.stdout.write(char)
+        sys.stdout.flush()
+
+    elapsed = time.time() - start
+    print(f'\\n\\n\U0001f4ca [{len(generated_tokens)} tokens in {elapsed:.1f}s]')
+    return tokenizer.decode(generated_tokens)
+
+# --- Test questions ---
+questions = [
+    'What is 25% of 200?',
+    'Solve: 5x + 12 = 32.',
+    'If a_n = 2 * a_{n-1} + 3 and a_1 = 1, find a_4.',
+    'A store sells notebooks for $3 and pens for $1.50. If Maria buys 4 notebooks and 6 pens, how much does she spend?',
+    'How does the S-CoT reasoning framework differ from flat chain-of-thought?',
+]
+
+results = []
+for q in questions:
+    answer = generate(q)
+    results.append({'question': q, 'answer': answer})\
+"""),
+
+        code_cell("""\
+# Cell 6: Pretty-print results
 from IPython.display import HTML, display
 
-CARD_STYLE = '''
-<div style="border:1px solid #555; border-radius:10px; padding:18px; margin:14px 0;
-            background:linear-gradient(135deg, #1a1a2e 0%, #16213e 100%);
-            box-shadow: 0 4px 15px rgba(0,0,0,0.3);">
-    <div style="color:#e94560; font-weight:bold; font-size:15px;
-                border-bottom:1px solid #333; padding-bottom:8px; margin-bottom:10px;">
-        \U0001f4ac Q: {question}
-    </div>
-    <div style="color:#eee; margin-top:8px; white-space:pre-wrap;
-                font-family:'Fira Code',monospace; font-size:13px;
-                line-height:1.6; max-height:400px; overflow-y:auto;">
-{answer}
-    </div>
-    <div style="color:#888; margin-top:10px; font-size:11px;
-                border-top:1px solid #333; padding-top:6px;">
-        \U0001f4ca {num_tokens} tokens &bull; {time_seconds}s &bull; {model}
-    </div>
-</div>
-'''
-
-def find_results(name):
-    \"\"\"Search common paths for inference results.\"\"\"
-    candidates = [
-        f'/content/scot_results/inference_{name}.json',
-        f'/content/scot_results/tpu-builder1-scot-checkpoints/inference_{name}.json',
-    ]
-    for p in candidates:
-        if os.path.exists(p):
-            with open(p) as f:
-                return json.load(f)
-    return None
-
-def show_results(data, title, emoji='\U0001f52c'):
-    if not data:
-        print(f'{title}: No results found yet.')
-        return
-    display(HTML(f'<h2 style="color:#e94560;">{emoji} {title}</h2>'))
-    for r in data:
-        display(HTML(CARD_STYLE.format(**r)))
-
-# --- Show S-CoT Results ---
-scot_data = find_results('scot')
-show_results(scot_data, 'S-CoT Structured Reasoning', '\U0001f9e0')\
-"""),
-
-        code_cell("""\
-# Cell 3: Display Flat baseline results
-flat_data = find_results('flat')
-show_results(flat_data, 'Flat Baseline', '\U0001f4d6')\
-"""),
-
-        code_cell("""\
-# Cell 4: Side-by-side comparison
-scot = find_results('scot')
-flat = find_results('flat')
-
-if scot and flat:
-    display(HTML('<h2 style="color:#e94560;">\u2694\ufe0f Side-by-Side: S-CoT vs Flat</h2>'))
-    for s, f_item in zip(scot, flat):
-        display(HTML(f'''
-        <div style="border:1px solid #555; border-radius:10px; padding:18px; margin:14px 0;
-                    background:linear-gradient(135deg, #0f3460 0%, #1a1a2e 100%);
-                    box-shadow: 0 4px 15px rgba(0,0,0,0.3);">
-            <div style="color:#e94560; font-weight:bold; font-size:15px;
-                        border-bottom:1px solid #444; padding-bottom:8px; margin-bottom:12px;">
-                \U0001f4ac Q: {s["question"]}
-            </div>
-            <div style="display:flex; gap:16px; margin-top:8px;">
-                <div style="flex:1; background:rgba(0,210,255,0.08); padding:14px;
-                            border-radius:8px; border-left:3px solid #00d2ff;">
-                    <div style="color:#00d2ff; font-weight:bold; margin-bottom:8px;">
-                        \U0001f9e0 S-CoT ({s["num_tokens"]} tok, {s["time_seconds"]}s)
-                    </div>
-                    <div style="color:#eee; white-space:pre-wrap; font-family:monospace;
-                                font-size:12px; line-height:1.5; max-height:300px;
-                                overflow-y:auto;">{s["answer"][:600]}</div>
-                </div>
-                <div style="flex:1; background:rgba(255,165,0,0.08); padding:14px;
-                            border-radius:8px; border-left:3px solid #ffa500;">
-                    <div style="color:#ffa500; font-weight:bold; margin-bottom:8px;">
-                        \U0001f4d6 Flat ({f_item["num_tokens"]} tok, {f_item["time_seconds"]}s)
-                    </div>
-                    <div style="color:#eee; white-space:pre-wrap; font-family:monospace;
-                                font-size:12px; line-height:1.5; max-height:300px;
-                                overflow-y:auto;">{f_item["answer"][:600]}</div>
-                </div>
-            </div>
+display(HTML(f'<h2 style="color:#e94560;">\U0001f9e0 {MODEL_VARIANT} Results</h2>'))
+for r in results:
+    display(HTML(f'''
+    <div style="border:1px solid #555; border-radius:10px; padding:18px; margin:14px 0;
+                background:linear-gradient(135deg, #1a1a2e 0%, #16213e 100%);
+                box-shadow: 0 4px 15px rgba(0,0,0,0.3);">
+        <div style="color:#e94560; font-weight:bold; font-size:15px;
+                    border-bottom:1px solid #333; padding-bottom:8px; margin-bottom:10px;">
+            \U0001f4ac Q: {r["question"]}
         </div>
-        '''))
-else:
-    print('Need both S-CoT and Flat results for comparison.')
-    print('Run the watchdog to completion and re-download.')\
-"""),
+        <div style="color:#eee; white-space:pre-wrap;
+                    font-family:monospace; font-size:13px; line-height:1.6;">
+{r["answer"]}
+        </div>
+    </div>
+    '''))
 
-        code_cell("""\
-# Cell 5: Training metrics dashboard
-from IPython.display import HTML, display
-
-display(HTML('''
-<h2 style="color:#e94560;">\U0001f4ca Training Summary</h2>
-<table style="border-collapse:collapse; margin:12px 0; font-family:'Fira Code',monospace;
-              width:100%; max-width:700px;">
-  <tr style="background:linear-gradient(90deg, #16213e, #0f3460);">
-    <th style="padding:10px 16px; border:1px solid #444; color:#e94560; text-align:left;">Metric</th>
-    <th style="padding:10px 16px; border:1px solid #444; color:#00d2ff; text-align:center;">\U0001f9e0 S-CoT</th>
-    <th style="padding:10px 16px; border:1px solid #444; color:#ffa500; text-align:center;">\U0001f4d6 Flat</th>
-  </tr>
-  <tr><td style="padding:8px 16px; border:1px solid #333; color:#ccc;">Base Model</td>
-      <td style="padding:8px 16px; border:1px solid #333; color:#eee; text-align:center;">Qwen2.5-3B-Instruct</td>
-      <td style="padding:8px 16px; border:1px solid #333; color:#eee; text-align:center;">Qwen2.5-3B-Instruct</td></tr>
-  <tr style="background:#1a1a2e;">
-      <td style="padding:8px 16px; border:1px solid #333; color:#ccc;">LoRA Config</td>
-      <td style="padding:8px 16px; border:1px solid #333; color:#eee; text-align:center;">rank=16, \u03b1=32</td>
-      <td style="padding:8px 16px; border:1px solid #333; color:#eee; text-align:center;">rank=16, \u03b1=32</td></tr>
-  <tr><td style="padding:8px 16px; border:1px solid #333; color:#ccc;">Training Steps</td>
-      <td style="padding:8px 16px; border:1px solid #333; color:#eee; text-align:center;">500</td>
-      <td style="padding:8px 16px; border:1px solid #333; color:#eee; text-align:center;">500</td></tr>
-  <tr style="background:#1a1a2e;">
-      <td style="padding:8px 16px; border:1px solid #333; color:#ccc;">Dataset Size</td>
-      <td style="padding:8px 16px; border:1px solid #333; color:#eee; text-align:center;">3,817</td>
-      <td style="padding:8px 16px; border:1px solid #333; color:#eee; text-align:center;">3,681</td></tr>
-  <tr style="background:linear-gradient(90deg, #1a1a2e, #16213e);">
-      <td style="padding:10px 16px; border:1px solid #444; color:#e94560; font-weight:bold;">\u2b07 Final Loss</td>
-      <td style="padding:10px 16px; border:1px solid #444; color:#00d2ff; font-weight:bold; text-align:center; font-size:16px;">1.27</td>
-      <td style="padding:10px 16px; border:1px solid #444; color:#ffa500; font-weight:bold; text-align:center; font-size:16px;">0.275</td></tr>
-  <tr style="background:linear-gradient(90deg, #16213e, #1a1a2e);">
-      <td style="padding:10px 16px; border:1px solid #444; color:#e94560; font-weight:bold;">Perplexity</td>
-      <td style="padding:10px 16px; border:1px solid #444; color:#00d2ff; font-weight:bold; text-align:center; font-size:16px;">3.55</td>
-      <td style="padding:10px 16px; border:1px solid #444; color:#ffa500; font-weight:bold; text-align:center; font-size:16px;">1.32</td></tr>
-  <tr><td style="padding:8px 16px; border:1px solid #333; color:#ccc;">Hardware</td>
-      <td style="padding:8px 16px; border:1px solid #333; color:#eee; text-align:center;">TPU v6e-8</td>
-      <td style="padding:8px 16px; border:1px solid #333; color:#eee; text-align:center;">TPU v6e-8</td></tr>
-  <tr style="background:#1a1a2e;">
-      <td style="padding:8px 16px; border:1px solid #333; color:#ccc;">Training Time</td>
-      <td style="padding:8px 16px; border:1px solid #333; color:#eee; text-align:center;">~2m 51s</td>
-      <td style="padding:8px 16px; border:1px solid #333; color:#eee; text-align:center;">~2m 51s</td></tr>
-  <tr><td style="padding:8px 16px; border:1px solid #333; color:#ccc;">Speed</td>
-      <td style="padding:8px 16px; border:1px solid #333; color:#eee; text-align:center;">~4.2 steps/s</td>
-      <td style="padding:8px 16px; border:1px solid #333; color:#eee; text-align:center;">~4.2 steps/s</td></tr>
-</table>
-'''))\
+print("\\n\u2705 Done! Switch MODEL_VARIANT in Cell 4 to try the other model.")\
 """),
     ],
     "metadata": {
         "colab": {"provenance": []},
         "kernelspec": {"display_name": "Python 3", "name": "python3"},
         "language_info": {"name": "python", "version": "3.12.0"},
+        "accelerator": "TPU",
     },
     "nbformat": 4,
     "nbformat_minor": 0,
@@ -234,4 +278,4 @@ display(HTML('''
 with open("colab_inference.ipynb", "w", encoding="utf-8") as f:
     json.dump(notebook, f, indent=2, ensure_ascii=False)
 
-print("✅ Notebook colab_inference.ipynb generated successfully!")
+print("Notebook generated!")
