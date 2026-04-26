@@ -8,6 +8,7 @@ Usage (on TPU VM):
   python ~/scot/training/run_inference.py --model flat
 """
 import os, json, argparse, time
+import numpy as np
 import jax
 import jax.numpy as jnp
 from flax import nnx
@@ -68,7 +69,7 @@ def main():
     config = qwen_lib.ModelConfig.qwen2p5_3b()
     n = len(jax.devices())
     mesh = jax.sharding.Mesh(
-        jnp.array(jax.devices()).reshape((n, 1)),
+        np.array(jax.devices()).reshape((n, 1)),
         ('fsdp', 'tp')
     )
 

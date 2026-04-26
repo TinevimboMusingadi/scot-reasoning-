@@ -48,7 +48,6 @@ notebook = {
 !pip install -q 'numpy<2.0.0'
 !pip install -q 'google-tunix[prod]'
 !pip install -q -U 'transformers>=4.45,<=4.57.1'
-!pip install -q jsonlines
 
 # Restart runtime so numpy C-extensions reload cleanly
 import os
@@ -81,20 +80,26 @@ import os
 !mkdir -p /content/checkpoints/sft-scot
 !mkdir -p /content/checkpoints/sft-flat
 
-print("Downloading S-CoT checkpoint...")
-!gsutil -m cp -r gs://tpu-builder1-scot-checkpoints/sft-scot/* /content/checkpoints/sft-scot/ 2>/dev/null || echo '\u26a0\ufe0f S-CoT checkpoint not found in bucket yet'
-
-print("\\nDownloading Flat checkpoint...")
-!gsutil -m cp -r gs://tpu-builder1-scot-checkpoints/sft-flat/* /content/checkpoints/sft-flat/ 2>/dev/null || echo '\u26a0\ufe0f Flat checkpoint not found in bucket yet'
+print("Downloading from GCS bucket...")
+# Orbax may save as .orbax-checkpoint-tmp if async finalization fails,
+# so we download everything and check both paths
+!gsutil -m cp -r 'gs://tpu-builder1-scot-checkpoints/sft-scot/**' /content/checkpoints/sft-scot/ 2>/dev/null || true
+!gsutil -m cp -r 'gs://tpu-builder1-scot-checkpoints/sft-scot.orbax-checkpoint-tmp/**' /content/checkpoints/sft-scot/ 2>/dev/null || true
+!gsutil -m cp -r 'gs://tpu-builder1-scot-checkpoints/sft-flat/**' /content/checkpoints/sft-flat/ 2>/dev/null || true
+!gsutil -m cp -r 'gs://tpu-builder1-scot-checkpoints/sft-flat.orbax-checkpoint-tmp/**' /content/checkpoints/sft-flat/ 2>/dev/null || true
 
 # Show what we got
 print("\\n" + "="*50)
 for variant in ['sft-scot', 'sft-flat']:
     path = f'/content/checkpoints/{variant}'
     if os.path.exists(path):
-        files = os.listdir(path)
-        total = sum(os.path.getsize(os.path.join(path, f)) for f in files if os.path.isfile(os.path.join(path, f)))
-        print(f"  {variant}: {len(files)} files, {total:,} bytes")
+        count = 0
+        total = 0
+        for root, dirs, files in os.walk(path):
+            for f in files:
+                count += 1
+                total += os.path.getsize(os.path.join(root, f))
+        print(f"  {variant}: {count} files, {total:,} bytes")
     else:
         print(f"  {variant}: not found")\
 """),
@@ -103,6 +108,7 @@ for variant in ['sft-scot', 'sft-flat']:
 #@title Cell 4: Load Model & Checkpoint { run: "auto" }
 MODEL_VARIANT = 'sft-scot' #@param ['sft-scot', 'sft-flat']
 
+import numpy as np
 import jax
 import jax.numpy as jnp
 from transformers import AutoTokenizer
@@ -114,7 +120,7 @@ from huggingface_hub import snapshot_download
 import qwix
 import os
 
-# S-CoT special tokens (only needed for sft-scot)
+# S-CoT special tokens
 SCOT_TOKENS = [
     "<reasoning>", "</reasoning>",
     "<meta_reasoning>", "</meta_reasoning>",
@@ -133,15 +139,15 @@ tokenizer = AutoTokenizer.from_pretrained(base_model_id)
 
 if MODEL_VARIANT == 'sft-scot':
     tokenizer.add_tokens(SCOT_TOKENS, special_tokens=True)
-    print(f"Added {len(SCOT_TOKENS)} S-CoT tokens to tokenizer.")
+    print(f"Added {len(SCOT_TOKENS)} S-CoT tokens.")
 
-# 2. Build base model on TPU
+# 2. Build base model on TPU — use np.array, NOT jnp.array for devices!
 print("\\nBuilding Qwen2.5-3B on TPU...")
 config = qwen_lib.ModelConfig.qwen2p5_3b()
 devices = jax.devices()
 n = len(devices)
 mesh = jax.sharding.Mesh(
-    jnp.array(devices).reshape((n, 1)),
+    np.array(devices).reshape((n, 1)),
     ('fsdp', 'tp')
 )
 
@@ -150,7 +156,7 @@ with mesh:
     model = qwen_params.create_model_from_safe_tensors(
         model_path, config, mesh, dtype=jnp.bfloat16
     )
-print("\u2705 Base model loaded on TPU.")
+print("\u2705 Base model loaded.")
 
 # 3. Apply LoRA
 print("Applying LoRA (rank=16, alpha=32)...")
@@ -175,7 +181,7 @@ if os.path.exists(ckpt_dir) and any(os.scandir(ckpt_dir)):
 else:
     print(f"\u26a0\ufe0f {ckpt_dir} is empty — running with UNTRAINED LoRA weights!")
 
-print(f"\\n\U0001f680 Model ready for inference ({MODEL_VARIANT}).")\
+print(f"\\n\U0001f680 Ready for inference ({MODEL_VARIANT}).")\
 """),
 
         code_cell("""\
@@ -184,7 +190,6 @@ from tunix.sft import utils as tunix_utils
 import time, sys
 
 def generate(question, max_new_tokens=512):
-    \"\"\"Generate a response with streaming output.\"\"\"
     prompt = f'<|im_start|>user\\n{question}<|im_end|>\\n<|im_start|>assistant\\n'
     input_ids = jnp.array([tokenizer.encode(prompt)])
     current_ids = input_ids
