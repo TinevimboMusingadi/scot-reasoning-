@@ -4,10 +4,19 @@ import sys
 import json
 import os
 
-ZONE = "us-east5-a"
+# --- CONFIGURATION ---
+# Try different zones if one is stuck. Available options from TPU Builders:
+#   v5p: us-east5-a (accelerator-type=v5p-8, runtime=v2-alpha-tpuv5)
+#   v6e: us-central1-a (accelerator-type=v6e-8, runtime=v2-alpha-tpuv6e)
+#   v6e: southamerica-east1-c (accelerator-type=v6e-8, runtime=v2-alpha-tpuv6e)
+#   v5e: us-west4-a (accelerator-type=v5litepod-8, runtime=v2-alpha-tpuv5-lite)
+
+ZONE = "us-central1-a"
 PROJECT = "tpu-builder1"
 QUEUE_NAME = "tpu-builder-queue"
 NODE_NAME = "my-tpu-node"
+ACCEL_TYPE = "v6e-8"
+RUNTIME = "v2-alpha-tpuv6e"
 GCLOUD_CMD = "gcloud.cmd" if os.name == 'nt' else "gcloud"
 
 def describe_queue():
@@ -26,15 +35,24 @@ def delete_queue():
     cmd = [GCLOUD_CMD, "alpha", "compute", "tpus", "queued-resources", "delete", QUEUE_NAME, f"--zone={ZONE}", f"--project={PROJECT}", "--force", "--quiet"]
     subprocess.run(cmd, capture_output=True, text=True)
 
+def delete_old_queue():
+    """Delete the old queue in the previous zone if it exists."""
+    old_zone = "us-east5-a"
+    print(f"[*] Cleaning up old queue in {old_zone}...")
+    cmd = [GCLOUD_CMD, "alpha", "compute", "tpus", "queued-resources", "delete", QUEUE_NAME, f"--zone={old_zone}", f"--project={PROJECT}", "--force", "--quiet"]
+    subprocess.run(cmd, capture_output=True, text=True)
+
 def create_queue():
-    print(f"[*] Creating flex-start queue {QUEUE_NAME} (max 4h)...")
+    print(f"[*] Creating flex-start queue {QUEUE_NAME} in {ZONE} ({ACCEL_TYPE}, max 4h)...")
     cmd = [
         GCLOUD_CMD, "alpha", "compute", "tpus", "queued-resources", "create", QUEUE_NAME,
         f"--node-id={NODE_NAME}", f"--zone={ZONE}", f"--project={PROJECT}",
-        "--accelerator-type=v5p-8", "--runtime-version=v2-alpha-tpuv5",
+        f"--accelerator-type={ACCEL_TYPE}", f"--runtime-version={RUNTIME}",
         "--provisioning-model=flex-start", "--max-run-duration=4h"
     ]
-    subprocess.run(cmd, capture_output=True, text=True)
+    result = subprocess.run(cmd, capture_output=True, text=True)
+    if result.returncode != 0:
+        print(f"[!] Queue creation output: {result.stderr}")
 
 def launch_training():
     print(f"[*] TPU is ACTIVE! Waiting 45s for boot sequences...")
@@ -54,7 +72,12 @@ def launch_training():
 def main():
     print("=========================================")
     print("      SFT Distillation Watchdog          ")
+    print(f"  Zone: {ZONE} | TPU: {ACCEL_TYPE}")
     print("=========================================")
+    
+    # Clean up old queue in previous zone first
+    delete_old_queue()
+    
     while True:
         state = describe_queue()
         
