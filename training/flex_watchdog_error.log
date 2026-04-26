@@ -1,0 +1,7 @@
+At C:\Users\Tinevimbo\scot-reasoning-\training\flex_watchdog.ps1:50 char:77
++ ... Write-Host "$(Get-Date -Format 'HH:mm:ss'): Resource state is $desc."
++                                                                         ~
+The string is missing the terminator: ".
+    + CategoryInfo          : ParserError: (:) [], ParentContainsErrorRecordException
+    + FullyQualifiedErrorId : TerminatorExpectedAtEndOfString
+ 

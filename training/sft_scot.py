@@ -157,8 +157,11 @@ def main():
     trainer.with_gen_model_input_fn(input_fn)
     trainer.train(train_ds=train_data)
 
-    # Save checkpoint
+    # Save checkpoint — Orbax refuses to overwrite, so clear first
     save_path = args.output
+    import shutil
+    if os.path.isdir(save_path):
+        shutil.rmtree(save_path)
     os.makedirs(save_path, exist_ok=True)
     
     from orbax import checkpoint as ocp

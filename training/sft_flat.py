@@ -133,10 +133,14 @@ def main():
     trainer.with_gen_model_input_fn(input_fn)
     trainer.train(train_ds=train_data)
 
-    # Save checkpoint
+    # Save checkpoint — Orbax refuses to overwrite, so clear first
+    import shutil
+    if os.path.isdir(args.output):
+        shutil.rmtree(args.output)
+    os.makedirs(args.output, exist_ok=True)
+    
     from orbax import checkpoint as ocp
     checkpointer = ocp.StandardCheckpointer()
-    os.makedirs(args.output, exist_ok=True)
     checkpointer.save(args.output, nnx.state(lora_model))
     print(f"Checkpoint saved to {args.output}")
 
