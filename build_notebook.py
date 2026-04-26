@@ -69,7 +69,15 @@ print(f"\\n\u2705 TPU detected! {len(devices)} cores available.")
 # Authenticate for GCS access
 from google.colab import auth
 auth.authenticate_user()
-print("\u2705 Authenticated with Google Cloud.")\
+print("\u2705 Authenticated with Google Cloud.")
+
+# Clear any expired HuggingFace tokens (causes 401 on public models)
+from huggingface_hub import logout
+try:
+    logout()
+except Exception:
+    pass
+print("\u2705 HuggingFace auth cleared (public models only).")\
 """),
 
         code_cell("""\
