@@ -157,12 +157,12 @@ def main():
     trainer.with_gen_model_input_fn(input_fn)
     trainer.train(train_ds=train_data)
 
-    # Save checkpoint — Orbax refuses to overwrite, so clear first
+    # Save checkpoint — Orbax refuses ANY existing directory, so nuke it completely
     save_path = args.output
     import shutil
-    if os.path.isdir(save_path):
+    if os.path.exists(save_path):
         shutil.rmtree(save_path)
-    os.makedirs(save_path, exist_ok=True)
+    # Do NOT recreate the dir — Orbax creates it internally and fails if it exists
     
     from orbax import checkpoint as ocp
     checkpointer = ocp.StandardCheckpointer()
