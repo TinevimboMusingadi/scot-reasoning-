@@ -71,13 +71,19 @@ from google.colab import auth
 auth.authenticate_user()
 print("\u2705 Authenticated with Google Cloud.")
 
-# Clear any expired HuggingFace tokens (causes 401 on public models)
-from huggingface_hub import logout
-try:
-    logout()
-except Exception:
-    pass
-print("\u2705 HuggingFace auth cleared (public models only).")\
+# Nuke any expired HuggingFace tokens from disk
+import os, shutil
+for p in [
+    os.path.expanduser('~/.cache/huggingface/token'),
+    os.path.expanduser('~/.huggingface/token'),
+]:
+    if os.path.exists(p):
+        os.remove(p) if os.path.isfile(p) else shutil.rmtree(p)
+        print(f'Removed expired HF token: {p}')
+
+os.environ.pop('HF_TOKEN', None)
+os.environ.pop('HUGGING_FACE_HUB_TOKEN', None)
+print("\u2705 HuggingFace auth cleared.")\
 """),
 
         code_cell("""\
@@ -142,7 +148,7 @@ SCOT_TOKENS = [
 
 # 1. Load tokenizer
 base_model_id = 'Qwen/Qwen2.5-3B-Instruct'
-tokenizer = AutoTokenizer.from_pretrained(base_model_id)
+tokenizer = AutoTokenizer.from_pretrained(base_model_id, token=False)
 
 if MODEL_VARIANT == 'sft-scot':
     tokenizer.add_tokens(SCOT_TOKENS, special_tokens=True)
@@ -158,7 +164,7 @@ mesh = jax.sharding.Mesh(
     ('fsdp', 'tp')
 )
 
-model_path = snapshot_download(repo_id=base_model_id, ignore_patterns=['*.pth'])
+model_path = snapshot_download(repo_id=base_model_id, ignore_patterns=['*.pth'], token=False)
 with mesh:
     model = qwen_params.create_model_from_safe_tensors(
         model_path, config, mesh, dtype=jnp.bfloat16
