@@ -76,7 +76,7 @@ def main():
     )
     model_input = model.get_model_input()
     lora_model = qwix.apply_lora_to_model(
-        model, lora_provider, **model_input
+        model, lora_provider, rngs=nnx.Rngs(0), **model_input
     )
 
     # Shard the LoRA state properly across the mesh (from official Tunix LoRA docs)
@@ -109,10 +109,11 @@ def main():
     # gen_model_input_fn — follows the official Tunix pattern from the docs.
     # Uses tunix.sft.utils to build correct positions and causal attention masks.
     def input_fn(x):
-        mask = x["input_tokens"] != pad_id
+        tokens = jnp.atleast_2d(x["input_tokens"])
+        mask = tokens != pad_id
         return {
-            "input_tokens": x["input_tokens"],
-            "input_mask": x["input_mask"],
+            "input_tokens": tokens,
+            "input_mask": jnp.atleast_2d(x["input_mask"]),
             "positions": tunix_utils.build_positions_from_mask(mask),
             "attention_mask": tunix_utils.make_causal_attn_mask(mask),
         }
