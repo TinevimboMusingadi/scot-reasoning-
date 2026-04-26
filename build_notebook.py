@@ -44,12 +44,11 @@ notebook = {
         ]),
 
         code_cell("""\
-# Cell 1: Install dependencies & restart runtime
-!pip install -q 'numpy<2.0.0'
-!pip install -q 'google-tunix[prod]'
-!pip install -q -U 'transformers>=4.45,<=4.57.1'
+# Cell 1: Install dependencies with uv (faster + better resolution)
+!pip install -q uv
+!uv pip install --system 'google-tunix[prod]' 'transformers>=4.45,<=4.57.1'
 
-# Restart runtime so numpy C-extensions reload cleanly
+# Restart runtime so C-extensions reload cleanly
 import os
 os.kill(os.getpid(), 9)"""),
 
