@@ -43,6 +43,18 @@ echo "Flat Run Finished."
 echo "All training scripts completed."
 
 echo "======================================"
+echo "Running S-CoT Inference on TPU"
+echo "======================================"
+python training/run_inference.py --model scot || echo "S-CoT inference failed (non-fatal)"
+
+echo "======================================"
+echo "Running Flat Inference on TPU"
+echo "======================================"
+python training/run_inference.py --model flat || echo "Flat inference failed (non-fatal)"
+
+echo "All training and inference completed."
+
+echo "======================================"
 echo "Safeguarding Final Checkpoints to GCS"
 echo "======================================"
 # Terminate the backup loop cleanly
