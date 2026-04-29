@@ -60,7 +60,7 @@ def main():
     parser.add_argument("--data",   default=os.path.expanduser("~/scot/data/full_run/scot_traces.jsonl"))
     parser.add_argument("--output", default=os.path.expanduser("~/scot/outputs/sft-scot"))
     parser.add_argument("--model",  default="Qwen/Qwen2.5-3B-Instruct")
-    parser.add_argument("--steps",  type=int, default=500)
+    parser.add_argument("--steps",  type=int, default=2000)
     parser.add_argument("--lr",     type=float, default=2e-5) # Slightly lower LR for reasoning distillation
     parser.add_argument("--lora_rank", type=int, default=16)
     args = parser.parse_args()
